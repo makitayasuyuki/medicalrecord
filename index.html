@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>カルテ要約ツール（ブラウザ内で全処理・無料）</title>
+  <style>
+    :root { --bg:#0b0f14; --card:#121826; --ink:#e6edf3; --muted:#9fb0c0; --acc:#5fd3a1; --warn:#f0b429; }
+    html,body{height:100%}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji"}
+    .wrap{max-width:1000px;margin:0 auto;padding:24px}
+    h1{font-size:clamp(20px,3vw,28px);margin:0 0 8px}
+    .sub{color:var(--muted);margin:0 0 16px}
+    .card{background:var(--card);border:1px solid #1e2a3a;border-radius:16px;padding:16px;margin:16px 0;box-shadow:0 4px 20px rgba(0,0,0,.25)}
+    label{display:block;margin:.25rem 0 .5rem;color:var(--muted)}
+    select,input[type=file],textarea,button{width:100%;box-sizing:border-box;border-radius:12px;border:1px solid #263449;background:#0f1624;color:var(--ink);padding:12px}
+    textarea{min-height:220px;line-height:1.6}
+    .row{display:grid;gap:12px}
+    @media(min-width:720px){.row{grid-template-columns:1fr 1fr}}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .actions button{flex:1}
+    button{cursor:pointer}
+    .primary{background:var(--acc);color:#072014;border:none;font-weight:700}
+    .ghost{background:transparent;border:1px dashed #344a63}
+    .pill{display:inline-block;background:#12263a;border:1px solid #1c3450;color:#b9d9ff;padding:6px 10px;border-radius:999px;font-size:12px}
+    .tiny{font-size:12px;color:var(--muted)}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
+    .progress{height:10px;background:#0f1b2e;border-radius:999px;overflow:hidden}
+    .bar{height:100%;width:0%;background:linear-gradient(90deg,var(--warn),#62d6f6);transition:width .2s}
+    .badge{display:inline-flex;align-items:center;gap:6px}
+    .badge svg{width:14px;height:14px}
+    .hint{font-size:12px;color:#a7bacf}
+    .foot{margin-top:8px;color:#88a0b6}
+    .kicker{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="kicker">
+      <h1>カルテ要約ツール <span class="pill">100% ブラウザ内 / 無料</span></h1>
+    </div>
+    <p class="sub">ファイルをアップロード → 要点抽出 → 既定の「カルテ用」フォーマットでMarkdown出力。サーバ不要・個人情報は端末内で処理されます。</p>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <label>入力ファイル（PDF / DOCX / TXT / MD）</label>
+          <input id="file" type="file" accept=".pdf,.docx,.txt,.md,.markdown" />
+          <p class="hint">※ PDFはテキスト抽出できるもののみ（画像ベースは未対応）。</p>
+        </div>
+        <div>
+          <label>モデル（日本語対応・軽量ほど速い）</label>
+          <select id="model">
+            <option value="Qwen2-1.5B-Instruct-q4f32_1-MLC">Qwen2 1.5B Instruct（高精度・中）</option>
+            <option value="Qwen2-0.5B-Instruct-q4f32_1-MLC">Qwen2 0.5B Instruct（軽量・速い）</option>
+          </select>
+          <p class="hint">※ 初回はモデルのダウンロードがあります（端末にキャッシュ）。WebGPU対応ブラウザ推奨。</p>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>またはテキストを直接ペースト</label>
+        <textarea id="manual" placeholder="ここに本文を貼り付けてもOK（上のファイルは未選択で可）"></textarea>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>出力形式</label>
+        <div class="kicker">
+          <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 7h16M4 12h16M4 17h16"/></svg> Markdown（Notion貼り付け推奨）</span>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <div class="actions">
+          <button id="run" class="primary">要約を作成</button>
+          <button id="copy" class="ghost">コピー</button>
+          <button id="download" class="ghost">Markdownをダウンロード</button>
+        </div>
+        <div class="progress" style="margin-top:12px"><div id="pbar" class="bar"></div></div>
+        <div id="status" class="tiny" style="margin-top:6px">未実行</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <label>出力（カルテ用Markdown）</label>
+      <textarea id="out" class="mono" placeholder="ここに結果が表示されます"></textarea>
+      <div class="foot tiny">テンプレートは「カルテ用」既定フォーマットに準拠しています。</div>
+    </div>
+
+    <div class="tiny">Tips: 長文PDF/DOCXは自動でチャンク分割→段階要約→最終整形を行います。ブラウザを閉じると計算は止まります。</div>
+  </div>
+
+  <!-- PDF.js via CDN -->
+  <script src="https://unpkg.com/pdfjs-dist@3.2.146/build/pdf.min.js"></script>
+  <script>
+    // Configure worker for pdf.js
+    // See: https://mozilla.github.io/pdf.js/getting_started/
+    if (window['pdfjsLib']) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@3.2.146/build/pdf.worker.min.js`;
+    }
+  </script>
+  <!-- mammoth.js for DOCX parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.10.0/mammoth.browser.min.js"></script>
+
+  <!-- WebLLM via CDN (ESM) -->
+  <script type="module">
+    import * as webllm from "https://unpkg.com/@mlc-ai/web-llm@0.2.79/lib/index.js";
+
+    const $ = (s)=>document.querySelector(s);
+    const el = { file:$('#file'), model:$('#model'), manual:$('#manual'), run:$('#run'), copy:$('#copy'), dl:$('#download'), out:$('#out'), bar:$('#pbar'), status:$('#status') };
+
+    let engine = null;
+
+    function setProgress(pct, msg){ el.bar.style.width = `${Math.min(100,Math.max(0,pct))}%`; if(msg) el.status.textContent = msg; }
+
+    async function ensureEngine(){
+      if (engine) return engine;
+      const modelId = el.model.value;
+      setProgress(2, `モデル初期化中: ${modelId}`);
+      engine = await webllm.CreateMLCEngine(modelId, {
+        initProgressCallback: (info) => {
+          const pct = Math.round((info.progress || 0) * 100);
+          setProgress(pct, info.text || `読み込み ${pct}%`);
+        }
+      });
+      setProgress(100, `モデル準備完了: ${modelId}`);
+      return engine;
+    }
+
+    async function readFileAsText(file){
+      if (!file) return '';
+      const ext = file.name.toLowerCase().split('.').pop();
+      if (ext === 'txt' || ext === 'md' || ext === 'markdown'){
+        return await file.text();
+      }
+      if (ext === 'docx'){
+        const arrayBuffer = await file.arrayBuffer();
+        const { value } = await window.mammoth.extractRawText({ arrayBuffer });
+        return value || '';
+      }
+      if (ext === 'pdf'){
+        if (!window['pdfjsLib']) throw new Error('PDF.js が読み込まれていません');
+        const buf = await file.arrayBuffer();
+        const loadingTask = pdfjsLib.getDocument({ data: buf });
+        const pdf = await loadingTask.promise;
+        let text = '';
+        for (let p = 1; p <= pdf.numPages; p++){
+          const page = await pdf.getPage(p);
+          const content = await page.getTextContent();
+          const strings = content.items.map(it => it.str);
+          text += strings.join(' ') + "\n\n";
+        }
+        return text;
+      }
+      throw new Error('未対応の拡張子です');
+    }
+
+    function chunk(str, size=4000){
+      const out=[]; let i=0; while(i<str.length){ out.push(str.slice(i, i+size)); i+=size; } return out;
+    }
+
+    const TEMPLATE = `### 【[日付] [面談名] 記録】\n\n#### 参加者\n- 進行・回答者：\n- 相談者：\n- その他の参加者：\n\n---\n\n## 1. 相談内容\n\n### (1) 相談者の現状・背景（できる限り詳細に、文章形式で記述）\n\n### (2) 相談者の課題・悩み（箇条書き＋必要に応じて補足説明）\n\n---\n\n## 2. 回答とアドバイス\n\n### (1) 回答者の分析・見解（医学的・心理的な見立て、状況理解）\n\n### (2) 具体的な対応策・提案（家庭・学校・本人への関わりを含む）\n\n---\n\n## 3. 今後のアクションプラン（できるだけ具体的に、優先順位を含めて）\n\n---\n\n### まとめ（全体の方向性・支援の視点・安心を与える言葉を含めて記述）`;
+
+    const SYS = `あなたは日本語で専門的かつ簡潔に記述する専門ライターです。与えられた資料から、指示された「カルテ用」テンプレートに厳密に沿ってMarkdownでまとめてください。事実に忠実に、過剰な推測や誇張は避けます。見出し・区切り線・箇条書きの体裁を必ず維持してください。`;
+
+    async function llm(messages, stream=false){
+      const eng = await ensureEngine();
+      if (stream){
+        let acc = '';
+        const chunks = await eng.chat.completions.create({ messages, stream:true, temperature:0.2 });
+        for await (const ch of chunks){ acc += ch?.choices?.[0]?.delta?.content || ''; el.out.value = acc; }
+        return acc;
+      } else {
+        const res = await eng.chat.completions.create({ messages, temperature:0.2 });
+        return res?.choices?.[0]?.message?.content || '';
+      }
+    }
+
+    function buildChunkPrompt(text){
+      return [
+        { role:'system', content: SYS },
+        { role:'user', content: `以下は資料の一部です。後で全体を統合します。重要な事実・エピソード・数値・発言・時系列を「簡潔な箇条書きメモ」で抽出してください。最大20項目。原文のニュアンスを保ちます。\n\n--- 元テキスト ---\n${text}` }
+      ];
+    }
+
+    function buildFinalPrompt(bullets){
+      return [
+        { role:'system', content: SYS },
+        { role:'user', content: `以下の箇条書きメモのみを根拠に、テンプレートに厳密準拠でカルテを作成してください。推測での補完は禁止。\n\n【テンプレート】\n${TEMPLATE}\n\n【箇条書きメモ（統合）】\n${bullets}\n\n出力はMarkdownのみ。冒頭にテンプレートのタイトル行を含め、適切に要約・構成してください。` }
+      ];
+    }
+
+    el.run.addEventListener('click', async () => {
+      try{
+        el.out.value = '';
+        setProgress(1, '入力を準備中…');
+        const file = el.file.files?.[0] || null;
+        const pasted = el.manual.value.trim();
+        const text = pasted || await readFileAsText(file);
+        if (!text) throw new Error('テキストがありません（ファイル選択 or ペースト）');
+
+        setProgress(5, 'チャンク分割…');
+        const chunks = chunk(text, 6000); // ざっくり文字分割
+
+        // 1段階目：各チャンクを要点抽出
+        let allBullets = '';
+        for (let i=0;i<chunks.length;i++){
+          setProgress(5 + Math.round((i/chunks.length)*60), `要点抽出 ${i+1}/${chunks.length}`);
+          const memo = await llm( buildChunkPrompt(chunks[i]) );
+          allBullets += `\n\n### Memo ${i+1}\n` + memo;
+        }
+
+        // 2段階目：統合して最終カルテ整形
+        setProgress(75, '最終整形…');
+        const finalMd = await llm( buildFinalPrompt(allBullets), true );
+        el.out.value = finalMd;
+        setProgress(100, '完了');
+      }catch(err){
+        console.error(err);
+        el.status.textContent = 'エラー: ' + (err?.message || err);
+      }
+    });
+
+    el.copy.addEventListener('click', async ()=>{
+      if (!el.out.value) return; await navigator.clipboard.writeText(el.out.value); el.status.textContent = 'コピーしました';
+    });
+
+    el.dl.addEventListener('click', ()=>{
+      if (!el.out.value) return;
+      const blob = new Blob([el.out.value], { type:'text/markdown;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'karte-summary.md';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  </script>
+</body>
+</html>
